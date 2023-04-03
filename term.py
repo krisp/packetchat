@@ -1,6 +1,7 @@
 import sys
 import asyncio
 import serial_asyncio
+import re
 
 from PyQt6.QtWidgets import QApplication, QDialog, QMainWindow, QMessageBox
 from PyQt6.QtCore import QSettings
@@ -14,21 +15,18 @@ from settings_ui import Ui_Dialog as UI_Settings
 
 class SerialProtocol(asyncio.Protocol):    
     def __init__(self, data_recieved_callback=None):
-        self.data = str()
+        self.data = bytearray()
         self.data_ready = False
         self.connection_ready = False
 
     def connection_made(self, transport: serial_asyncio.SerialTransport) -> None:
-        self.transport = transport
-        self.pause_reading()  
+        self.transport = transport        
         self.transport.write(b'\x03')
         self.connection_ready = True       
 
     def data_received(self, data: bytes):
-        self.data += data.decode()
-        if '\n' in self.data:
-            self.data_ready = True
-            self.pause_reading()
+        self.data.extend(data)
+        #self.pause_reading()
         
     def connection_lost(self, exc):
         raise exc
@@ -37,9 +35,17 @@ class SerialProtocol(asyncio.Protocol):
         self.transport.pause_reading()
     
     def resume_reading(self) -> None:
-        self.data_ready = False
-        self.data = str()
         self.transport.resume_reading()
+    
+    def read_buffer(self) -> bytes:
+        self.pause_reading()
+        data = self.data
+        self.data = bytearray()
+        self.resume_reading()
+        return bytes(data)
+        
+        
+        
 
 class Window(QMainWindow, Ui_MainWindow):
     def __init__(self, parent=None, loop=None):
@@ -58,10 +64,11 @@ class Window(QMainWindow, Ui_MainWindow):
 
             p = self.s_protocol
             t = self.s_transport
-
+            
             while not p.connection_ready:
                 await asyncio.sleep(0.5)                    
-
+            
+            #p.pause_reading()
             t.write(f'ECHO OFF\r\n'.encode())
             t.write(f'MYCALL {self.MYCALL}\r\n'.encode())
             if not self.DIGIPETER:
@@ -69,13 +76,27 @@ class Window(QMainWindow, Ui_MainWindow):
             else:
                 t.write(f'UNPROTO CHAT via {self.DIGIPETER}\r\n'.encode())
             t.write(f'CONV\r\n'.encode())
+            #p.resume_reading()
 
-            p.resume_reading()
             while True:
                 await asyncio.sleep(1)
-                if p.data_ready:
-                    self.tbMonitor.append(p.data)
-                    p.resume_reading()
+                data = p.read_buffer()
+                if len(data) > 0:
+                    self.tbMonitor.setText(self.tbMonitor.toPlainText() + data.decode())
+                    d = data.decode()
+                    #W1QEX>CHAT,K1MAL*:mangos?
+                    pattern = re.compile(r'([0-9A-Z-]+)>CHAT[^:]+:(.*)')
+
+
+                    for m in pattern.finditer(d):
+                        call = m.group(1)
+                        msg = m.group(2)
+                        self.tbChat.append(f"<{call}> {msg}")
+                    #if ">" in d and ":" in d:
+                    #    call = d.split(">")[0]
+                    #    msg = d.split(":")[1]
+                    #    self.tbChat.append(f"<{call}> {msg}")
+                        
 
         except SerialException as e:
             self.tbMonitor.append('Exception:' + str(e))
