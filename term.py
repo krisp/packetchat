@@ -36,7 +36,17 @@ class Window(QMainWindow, Ui_MainWindow):
 
             while True:
                 pkt = await self.client.read_packet()
-                self.tbMonitor.append(pkt.data)                    
+                if pkt.datakind in [b'U',b'S',b'I']:
+                    pkt.data = pkt.data[:len(pkt.data)-2]
+                    self.tbMonitor.append(pkt.data)
+                if pkt.datakind == b'U' and pkt.callto == "CHAT":
+                    print("data:" + pkt.data)
+                    pkt.data = pkt.data[:len(pkt.data)-2]
+                    m = re.search(r"Len=([0-9]+)",pkt.data)                    
+                    if m:                        
+                        l = int(m.group(1))
+                        if pkt.callfrom != self.MYCALL:                                  
+                            self.tbChat.append(f"<{pkt.callfrom}> {pkt.data[l*-1:]}")
 
         except Exception as e:
             self.tbMonitor.append('Exception:' + str(e))
@@ -60,11 +70,13 @@ class Window(QMainWindow, Ui_MainWindow):
         self.tbChat.append(f"<{self.MYCALL}> {self.lineEdit.text()}")
 
         txt = self.lineEdit.text().encode()
-        data = struct.pack(f"c10s{len(txt)}s",b'\x01',self.DIGIPETER.encode(),txt)
-        pkt = agwpe.packet(agwpe_port=b'\x01',datakind=b'V',callfrom=self.MYCALL,callto="CHAT",data=data,datalen=len(data))
-        print(bytes(pkt))
-        await self.client.write_packet(pkt)
-        #self.s_transport.write(f"{self.lineEdit.text()}\r\n".encode())
+        if self.DIGIPETER:
+            data = struct.pack(f"c10s{len(txt)}s",b'\x01',self.DIGIPETER.encode(),txt)
+            pkt = agwpe.packet(agwpe_port=b'\x01',datakind=b'V',callfrom=self.MYCALL,callto="CHAT",data=data,datalen=len(data))        
+            await self.client.write_packet(pkt)       
+        else:
+            pkt = agwpe.packet(agwpe_port=b'\x01',datakind=b'M',callfrom=self.MYCALL,callto="CHAT",data=txt,datalen=len(txt))        
+            await self.client.write_packet(pkt)       
         
         self.lineEdit.clear()        
 
