@@ -1,51 +1,17 @@
 import sys
 import asyncio
-import serial_asyncio
 import re
+import agwpe
+import struct
 
 from PyQt6.QtWidgets import QApplication, QDialog, QMainWindow, QMessageBox
 from PyQt6.QtCore import QSettings
 from PyQt6.uic import loadUi
 from qasync import QEventLoop, asyncSlot
 from serial.tools import list_ports
-from serial.serialutil import SerialException
 
 from main_window_ui import Ui_MainWindow
 from settings_ui import Ui_Dialog as UI_Settings
-
-class SerialProtocol(asyncio.Protocol):    
-    def __init__(self, data_recieved_callback=None):
-        self.data = bytearray()
-        self.data_ready = False
-        self.connection_ready = False
-
-    def connection_made(self, transport: serial_asyncio.SerialTransport) -> None:
-        self.transport = transport        
-        self.transport.write(b'\x03')
-        self.connection_ready = True       
-
-    def data_received(self, data: bytes):
-        self.data.extend(data)
-        #self.pause_reading()
-        
-    def connection_lost(self, exc):
-        raise exc
-    
-    def pause_reading(self) -> None:
-        self.transport.pause_reading()
-    
-    def resume_reading(self) -> None:
-        self.transport.resume_reading()
-    
-    def read_buffer(self) -> bytes:
-        self.pause_reading()
-        data = self.data
-        self.data = bytearray()
-        self.resume_reading()
-        return bytes(data)
-        
-        
-        
 
 class Window(QMainWindow, Ui_MainWindow):
     def __init__(self, parent=None, loop=None):
@@ -60,45 +26,19 @@ class Window(QMainWindow, Ui_MainWindow):
     @asyncSlot()
     async def serial_read(self):
         try:
-            self.s_transport, self.s_protocol = await serial_asyncio.create_serial_connection(self.loop, SerialProtocol, self.SERIALPORT, baudrate=9600)                        
+            self.client = agwpe.client()
+            await self.client.connect()          
 
-            p = self.s_protocol
-            t = self.s_transport
-            
-            while not p.connection_ready:
-                await asyncio.sleep(0.5)                    
-            
-            #p.pause_reading()
-            t.write(f'ECHO OFF\r\n'.encode())
-            t.write(f'MYCALL {self.MYCALL}\r\n'.encode())
-            if not self.DIGIPETER:
-                t.write(f'UNPROTO CHAT\r\n'.encode())
-            else:
-                t.write(f'UNPROTO CHAT via {self.DIGIPETER}\r\n'.encode())
-            t.write(f'CONV\r\n'.encode())
-            #p.resume_reading()
+            await self.client.write_packet(agwpe.packet(datakind=b'X',callfrom=self.MYCALL))                  
+            await self.client.write_packet(agwpe.packet(datakind=b'm'))
+            await self.client.write_packet(agwpe.packet(datakind=b'G'))            
+            pkt = await self.client.read_packet() # read the "X" packet response
 
             while True:
-                await asyncio.sleep(1)
-                data = p.read_buffer()
-                if len(data) > 0:
-                    self.tbMonitor.setText(self.tbMonitor.toPlainText() + data.decode())
-                    d = data.decode()
-                    #W1QEX>CHAT,K1MAL*:mangos?
-                    pattern = re.compile(r'([0-9A-Z-]+)>CHAT[^:]+:(.*)')
+                pkt = await self.client.read_packet()
+                self.tbMonitor.append(pkt.data)                    
 
-
-                    for m in pattern.finditer(d):
-                        call = m.group(1)
-                        msg = m.group(2)
-                        self.tbChat.append(f"<{call}> {msg}")
-                    #if ">" in d and ":" in d:
-                    #    call = d.split(">")[0]
-                    #    msg = d.split(":")[1]
-                    #    self.tbChat.append(f"<{call}> {msg}")
-                        
-
-        except SerialException as e:
+        except Exception as e:
             self.tbMonitor.append('Exception:' + str(e))
 
     def loadSettings(self):
@@ -114,10 +54,18 @@ class Window(QMainWindow, Ui_MainWindow):
 
     def exit(self):
         self.close()        
-
-    def lineEditReturnPressed(self):
+    
+    @asyncSlot()
+    async def lineEditReturnPressed(self):
         self.tbChat.append(f"<{self.MYCALL}> {self.lineEdit.text()}")
-        self.s_transport.write(f"{self.lineEdit.text()}\r\n".encode())
+
+        txt = self.lineEdit.text().encode()
+        data = struct.pack(f"c10s{len(txt)}s",b'\x01',self.DIGIPETER.encode(),txt)
+        pkt = agwpe.packet(agwpe_port=b'\x01',datakind=b'V',callfrom=self.MYCALL,callto="CHAT",data=data,datalen=len(data))
+        print(bytes(pkt))
+        await self.client.write_packet(pkt)
+        #self.s_transport.write(f"{self.lineEdit.text()}\r\n".encode())
+        
         self.lineEdit.clear()        
 
     def settingsClicked(self):        
