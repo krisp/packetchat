@@ -32,21 +32,22 @@ class Window(QMainWindow, Ui_MainWindow):
             await self.client.write_packet(agwpe.packet(datakind=b'X',callfrom=self.MYCALL))                  
             await self.client.write_packet(agwpe.packet(datakind=b'm'))
             await self.client.write_packet(agwpe.packet(datakind=b'G'))            
-            pkt = await self.client.read_packet() # read the "X" packet response
+            await self.client.read_packet() # read the "X" packet response
 
             while True:
                 pkt = await self.client.read_packet()
+                print(bytes(pkt.data.encode()))             
                 if pkt.datakind in [b'U',b'S',b'I']:
-                    pkt.data = pkt.data[:len(pkt.data)-2]
-                    self.tbMonitor.append(pkt.data)
+                    sep = pkt.data.index("\r")
+                    header = pkt.data[:sep]
+                    data = pkt.data[sep+1:].rstrip("\r")                    
+                    self.tbMonitor.append(header + " " + data)
                 if pkt.datakind == b'U' and pkt.callto == "CHAT":
-                    print("data:" + pkt.data)
-                    pkt.data = pkt.data[:len(pkt.data)-2]
-                    m = re.search(r"Len=([0-9]+)",pkt.data)                    
-                    if m:                        
-                        l = int(m.group(1))
-                        if pkt.callfrom != self.MYCALL:                                  
-                            self.tbChat.append(f"<{pkt.callfrom}> {pkt.data[l*-1:]}")
+                    sep = pkt.data.index("\r")
+                    header = pkt.data[:sep]
+                    data = pkt.data[sep+1:].rstrip("\r")
+                    if pkt.callfrom != self.MYCALL:
+                        self.tbChat.append(f"<{pkt.callfrom}> {data}")
 
         except Exception as e:
             self.tbMonitor.append('Exception:' + str(e))
